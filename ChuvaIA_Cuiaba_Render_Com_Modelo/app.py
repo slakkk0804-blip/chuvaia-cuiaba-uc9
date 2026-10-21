@@ -289,6 +289,50 @@ section[data-testid="stMain"] .block-container{
   section[data-testid="stSidebar"]{min-width:230px!important;max-width:230px!important;width:230px!important;}
   section[data-testid="stMain"] .block-container{padding:16px 15px 35px!important;}
 }
+
+/* ChuvaIA: revisão de legibilidade para browsers com tema escuro e modo claro do app.
+   A regra de contraste fica no fim para prevalecer sobre os estilos antigos. */
+:root{color-scheme:light!important;--text:#21283a!important;--muted:#566075!important;}
+[data-testid="stAppViewContainer"], [data-testid="stMain"],
+[data-testid="stSidebar"], .stApp {color-scheme:light!important;}
+.stMarkdown,[data-testid="stMarkdownContainer"],
+[data-testid="stCaptionContainer"],
+[data-testid="stWidgetLabel"]{
+  color:#253047!important;
+}
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stCaptionContainer"] p,
+[data-testid="stWidgetLabel"] p {color:#445168!important;}
+.section-title,.topbar-title,.person-name,.weather-item .value,
+.big-prob,.user-name,.section-title strong {color:#1d2638!important;}
+.section-subtitle,.tiny-label,.small-print,.helper-text,.forecast-line,
+.person-meta,.table-note,.sidebar-note,.sidebar-note span,
+.mini-pill,.ghost-pill,.quick-legend,.nav-section-label,
+[data-testid="stCaptionContainer"] p{color:#535e72!important;opacity:1!important;}
+/* Quatro cards mantêm suas cores originais com texto escuro e nítido. */
+.quick-card{color:#1c2940!important;}
+.quick-card .quick-label,.quick-card .quick-value,.quick-card .quick-sub,
+.quick-card .quick-icon{color:#1d2b44!important;opacity:1!important;
+ text-shadow:none!important;}
+.quick-card .quick-label{font-size:.78rem!important;}
+.quick-card .quick-sub{font-size:.74rem!important;}
+.quick-card.orange{background:linear-gradient(135deg,#ffe2cf,#f6b886)!important;}
+.quick-card.purple{background:linear-gradient(135deg,#e4ddff,#b3a8f5)!important;}
+.quick-card.cyan{background:linear-gradient(135deg,#d1f6fc,#8ee4ef)!important;}
+.quick-card.blue{background:linear-gradient(135deg,#e0e7ff,#a5b4ec)!important;}
+.quick-icon{background:#ffffff80!important;}
+/* A agenda usa fundo um pouco mais escuro para texto branco legível. */
+.calendar-card{background:linear-gradient(180deg,#6377c3,#495ca8)!important;}
+.calendar-card,.calendar-card *{color:#fff!important;}
+.calendar-dayname{color:#e8edff!important;opacity:1!important;}
+.calendar-empty{opacity:.55!important;}
+/* Rótulos e botões do Streamlit fora dos cards coloridos */
+section[data-testid="stSidebar"] [data-testid="stButton"] button{color:#3a4965!important;}
+section[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]{color:#463aab!important;}
+[data-testid="stExpander"] summary,[data-testid="stExpander"] p{color:#2b3853!important;}
+[data-testid="stDataFrame"]{color-scheme:light!important;}
+/* Modos de alto contraste e acessibilidade */
+@media(prefers-reduced-motion:reduce){.quick-card,.progress-fill{transition:none!important;}}
 </style>
 """,
     unsafe_allow_html=True,
@@ -306,11 +350,20 @@ def v_float(dicionario: dict, chave: str) -> float:
     return valor
 
 
+@st.cache_data(show_spinner=False)
+def abrir_metricas():
+    """Lê apenas o JSON; abas de análise não precisam carregar o modelo pesado."""
+    if not METRICAS.exists():
+        raise FileNotFoundError("Falta o arquivo artefatos/metricas.json.")
+    return json.loads(METRICAS.read_text(encoding="utf-8"))
+
+
 @st.cache_resource(show_spinner=False)
 def abrir_modelo():
-    if not MODELO.exists() or not METRICAS.exists():
-        raise FileNotFoundError("Faltam os arquivos treinados em artefatos/.")
-    return joblib.load(MODELO), json.loads(METRICAS.read_text(encoding="utf-8"))
+    """Carrega o Random Forest uma única vez por processo, sob demanda."""
+    if not MODELO.exists():
+        raise FileNotFoundError("Falta o arquivo artefatos/modelo_chuva.joblib.")
+    return joblib.load(MODELO), abrir_metricas()
 
 
 @st.cache_data(ttl=850, show_spinner=False)
@@ -404,7 +457,7 @@ def plot_base(titulo: str, altura: int = 280) -> go.Figure:
         height=altura,
         margin=dict(l=18, r=18, t=46, b=18),
         title=dict(text=titulo, x=.03, font=dict(size=15, color="#2f3142")),
-        font=dict(family="Plus Jakarta Sans, Segoe UI, sans-serif", size=11, color="#8f90a6"),
+        font=dict(family="Plus Jakarta Sans, Segoe UI, sans-serif", size=12, color="#4d566c"),
         xaxis=dict(showgrid=False, zeroline=False, showline=False),
         yaxis=dict(gridcolor="#f1f1f5", zeroline=False, showline=False),
         hoverlabel=dict(bgcolor="#2f3142", font_color="#fff"),
@@ -429,7 +482,7 @@ def graf_linha_historico(df: pd.DataFrame) -> go.Figure:
             fillcolor="rgba(218,188,160,.18)",
             hovertemplate="%{x|%d/%m %H:%M}<br><b>%{y:.1f}%</b><extra></extra>",
         ))
-        fig.update_xaxes(tickformat="%b")
+        fig.update_xaxes(tickformat="%d/%m")
         fig.update_yaxes(ticksuffix="%")
     return fig
 
@@ -453,6 +506,7 @@ def graf_donut(prob: float) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
 def graf_barras_modelos(meta: dict) -> go.Figure:
     nomes = list(meta["metricas_teste"].keys())
     valores = [meta["metricas_teste"][n]["f1_macro"] * 100 for n in nomes]
@@ -469,6 +523,7 @@ def graf_barras_modelos(meta: dict) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
 def graf_importancia(meta: dict) -> go.Figure:
     itens = meta["importancia_permutacao"][:5][::-1]
     fig = plot_base("Feature importance", 270)
@@ -483,6 +538,7 @@ def graf_importancia(meta: dict) -> go.Figure:
     return fig
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
 def graf_matriz(meta: dict) -> go.Figure:
     matriz = np.asarray(meta["matriz_confusao_teste"])
     fig = plot_base("Matriz de confusão", 285)
@@ -493,7 +549,7 @@ def graf_matriz(meta: dict) -> go.Figure:
         colorscale=[[0, "#f4f2ff"], [1, "#8d82ed"]],
         text=matriz,
         texttemplate="%{text}",
-        textfont=dict(color="#ffffff", size=14),
+        textfont=dict(color="#1d2440", size=15),
         showscale=False,
         hovertemplate="Real: %{y}<br>Previsto: %{x}<br>Casos: %{z}<extra></extra>",
     ))
@@ -508,15 +564,16 @@ def render_plot(fig: go.Figure, key: str):
 def render_calendar() -> str:
     today = date.today()
     cal = calendar.Calendar(firstweekday=6)
-    month_name = today.strftime("%B %Y")
-    # translate basic month names to pt-br-ish uppercase? keep neutral style.
+    meses_pt = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+    month_name = f"{meses_pt[today.month]} {today.year}"
     month_days = cal.monthdayscalendar(today.year, today.month)
     parts = [
         '<div class="calendar-card">',
         f'<div class="calendar-header"><span>{html.escape(month_name.title())}</span><span>🗓️</span></div>',
         '<div class="calendar-grid">',
     ]
-    for name in ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]:
+    for name in ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"]:
         parts.append(f'<div class="calendar-dayname">{name}</div>')
     for week in month_days:
         for d in week:
@@ -692,7 +749,7 @@ def dashboard_page() -> None:
 def analytics_page() -> None:
     topbar("Analytics")
     try:
-        _, meta = abrir_modelo()
+        meta = abrir_metricas()
     except (FileNotFoundError, OSError, ValueError) as err:
         st.warning("Ainda não há métricas disponíveis. Execute o treinamento.")
         st.caption(str(err))
@@ -794,7 +851,7 @@ def report_page() -> None:
                         'O desempenho varia entre estação seca e chuvosa. Não substitui alertas oficiais.</div>',
                         unsafe_allow_html=True)
     try:
-        _, meta = abrir_modelo()
+        meta = abrir_metricas()
     except (FileNotFoundError, OSError, ValueError) as err:
         st.warning("Execute o treinamento para gerar as métricas reais.")
         st.caption(str(err))
