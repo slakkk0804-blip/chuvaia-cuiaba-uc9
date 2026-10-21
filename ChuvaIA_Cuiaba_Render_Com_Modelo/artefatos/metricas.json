@@ -1,0 +1,516 @@
+{
+  "titulo": "ChuvaIA Cuiabá — UC9 Grupo 6",
+  "data_treinamento_utc": "2026-10-21T18:03:12+00:00",
+  "origem": "Open-Meteo Historical Weather API / ERA5",
+  "intervalo": [
+    "2020-01-01 00:00:00",
+    "2025-12-31 20:00:00"
+  ],
+  "amostras": 52605,
+  "amostras_por_particao": {
+    "treino": 36820,
+    "validacao": 7888,
+    "teste": 7891
+  },
+  "definicao_alvo": "Precipitação acumulada de t+1 a t+3 horas >= 0.2 mm",
+  "taxa_historica_chuva": 0.21091,
+  "classes_historicas": {
+    "sem_chuva": 41510,
+    "chuva": 11095
+  },
+  "colunas_modelo": [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "surface_pressure",
+    "cloud_cover",
+    "wind_speed_10m",
+    "direcao_vento_sin",
+    "direcao_vento_cos",
+    "hora_sin",
+    "hora_cos",
+    "ano_sin",
+    "ano_cos",
+    "fim_semana"
+  ],
+  "algoritmo_escolhido": "Random Forest",
+  "criterio_escolha": "Maior F1 macro no período de validação, sem olhar o teste",
+  "metricas_validacao": {
+    "Baseline (classe majoritária)": {
+      "acuracia": 0.78448,
+      "acuracia_balanceada": 0.5,
+      "f1_macro": 0.43961,
+      "f1_chuva": 0.0,
+      "precisao_chuva": 0.0,
+      "recall_chuva": 0.0,
+      "suporte": 7888
+    },
+    "Regressão Logística": {
+      "acuracia": 0.80756,
+      "acuracia_balanceada": 0.82935,
+      "f1_macro": 0.763,
+      "f1_chuva": 0.66025,
+      "precisao_chuva": 0.53288,
+      "recall_chuva": 0.86765,
+      "suporte": 7888
+    },
+    "Random Forest": {
+      "acuracia": 0.84077,
+      "acuracia_balanceada": 0.79484,
+      "f1_macro": 0.7776,
+      "f1_chuva": 0.65907,
+      "precisao_chuva": 0.6119,
+      "recall_chuva": 0.71412,
+      "suporte": 7888
+    },
+    "Gradient Boosting": {
+      "acuracia": 0.86334,
+      "acuracia_balanceada": 0.75184,
+      "f1_macro": 0.77631,
+      "f1_chuva": 0.63679,
+      "precisao_chuva": 0.74527,
+      "recall_chuva": 0.55588,
+      "suporte": 7888
+    }
+  },
+  "metricas_teste": {
+    "Baseline (classe majoritária)": {
+      "acuracia": 0.82081,
+      "acuracia_balanceada": 0.5,
+      "f1_macro": 0.45079,
+      "f1_chuva": 0.0,
+      "precisao_chuva": 0.0,
+      "recall_chuva": 0.0,
+      "suporte": 7891,
+      "brier": 0.17919
+    },
+    "Regressão Logística": {
+      "acuracia": 0.76948,
+      "acuracia_balanceada": 0.76809,
+      "f1_macro": 0.69467,
+      "f1_chuva": 0.54354,
+      "precisao_chuva": 0.42124,
+      "recall_chuva": 0.76591,
+      "suporte": 7891,
+      "brier": 0.14391
+    },
+    "Random Forest": {
+      "acuracia": 0.83526,
+      "acuracia_balanceada": 0.77747,
+      "f1_macro": 0.74779,
+      "f1_chuva": 0.59926,
+      "precisao_chuva": 0.53115,
+      "recall_chuva": 0.68741,
+      "suporte": 7891,
+      "brier": 0.11197
+    },
+    "Gradient Boosting": {
+      "acuracia": 0.85718,
+      "acuracia_balanceada": 0.70514,
+      "f1_macro": 0.72782,
+      "f1_chuva": 0.54019,
+      "precisao_chuva": 0.63838,
+      "recall_chuva": 0.46818,
+      "suporte": 7891,
+      "brier": 0.0978
+    }
+  },
+  "matriz_confusao_teste": [
+    [
+      5619,
+      858
+    ],
+    [
+      442,
+      972
+    ]
+  ],
+  "matrizes_por_modelo_teste": {
+    "Baseline (classe majoritária)": [
+      [
+        6477,
+        0
+      ],
+      [
+        1414,
+        0
+      ]
+    ],
+    "Regressão Logística": [
+      [
+        4989,
+        1488
+      ],
+      [
+        331,
+        1083
+      ]
+    ],
+    "Random Forest": [
+      [
+        5619,
+        858
+      ],
+      [
+        442,
+        972
+      ]
+    ],
+    "Gradient Boosting": [
+      [
+        6102,
+        375
+      ],
+      [
+        752,
+        662
+      ]
+    ]
+  },
+  "gridsearch_rf": {
+    "melhores_parametros": {
+      "estimar__max_depth": 14,
+      "estimar__min_samples_leaf": 3,
+      "estimar__n_estimators": 160
+    },
+    "melhor_f1_macro_cv": 0.76023
+  },
+  "importancia_permutacao": [
+    {
+      "variavel": "dew_point_2m",
+      "queda_f1_macro": 0.08809
+    },
+    {
+      "variavel": "cloud_cover",
+      "queda_f1_macro": 0.06649
+    },
+    {
+      "variavel": "hora_cos",
+      "queda_f1_macro": 0.06574
+    },
+    {
+      "variavel": "ano_cos",
+      "queda_f1_macro": 0.03791
+    },
+    {
+      "variavel": "relative_humidity_2m",
+      "queda_f1_macro": 0.0307
+    },
+    {
+      "variavel": "surface_pressure",
+      "queda_f1_macro": 0.01294
+    },
+    {
+      "variavel": "hora_sin",
+      "queda_f1_macro": 0.01288
+    },
+    {
+      "variavel": "wind_speed_10m",
+      "queda_f1_macro": 0.00809
+    },
+    {
+      "variavel": "temperature_2m",
+      "queda_f1_macro": 0.00681
+    },
+    {
+      "variavel": "direcao_vento_sin",
+      "queda_f1_macro": 0.0056
+    },
+    {
+      "variavel": "ano_sin",
+      "queda_f1_macro": 0.00292
+    },
+    {
+      "variavel": "fim_semana",
+      "queda_f1_macro": 0.00013
+    },
+    {
+      "variavel": "direcao_vento_cos",
+      "queda_f1_macro": -0.0014
+    }
+  ],
+  "recortes_desempenho_teste": {
+    "periodo": [
+      {
+        "grupo": "Madrugada (0–5h)",
+        "acuracia": 0.86156,
+        "acuracia_balanceada": 0.79362,
+        "f1_macro": 0.75132,
+        "f1_chuva": 0.58574,
+        "precisao_chuva": 0.50392,
+        "recall_chuva": 0.69928,
+        "suporte": 1972
+      },
+      {
+        "grupo": "Manhã (6–11h)",
+        "acuracia": 0.82675,
+        "acuracia_balanceada": 0.75995,
+        "f1_macro": 0.7423,
+        "f1_chuva": 0.59479,
+        "precisao_chuva": 0.54803,
+        "recall_chuva": 0.65026,
+        "suporte": 1974
+      },
+      {
+        "grupo": "Noite (18–23h)",
+        "acuracia": 0.86149,
+        "acuracia_balanceada": 0.74695,
+        "f1_macro": 0.70664,
+        "f1_chuva": 0.49351,
+        "precisao_chuva": 0.41956,
+        "recall_chuva": 0.5991,
+        "suporte": 1971
+      },
+      {
+        "grupo": "Tarde (12–17h)",
+        "acuracia": 0.79129,
+        "acuracia_balanceada": 0.77673,
+        "f1_macro": 0.7536,
+        "f1_chuva": 0.65724,
+        "precisao_chuva": 0.5878,
+        "recall_chuva": 0.74528,
+        "suporte": 1974
+      }
+    ],
+    "estacao": [
+      {
+        "grupo": "Chuvosa (out–abr)",
+        "acuracia": 0.72055,
+        "acuracia_balanceada": 0.72622,
+        "f1_macro": 0.69944,
+        "f1_chuva": 0.6198,
+        "precisao_chuva": 0.53271,
+        "recall_chuva": 0.74094,
+        "suporte": 4219
+      },
+      {
+        "grupo": "Seca (mai–set)",
+        "acuracia": 0.96705,
+        "acuracia_balanceada": 0.5449,
+        "f1_macro": 0.56852,
+        "f1_chuva": 0.15385,
+        "precisao_chuva": 0.42308,
+        "recall_chuva": 0.09402,
+        "suporte": 3672
+      }
+    ]
+  },
+  "chuva_horaria_historica": [
+    {
+      "hora": 0,
+      "registros": 2192,
+      "taxa": 0.18294
+    },
+    {
+      "hora": 1,
+      "registros": 2192,
+      "taxa": 0.18659
+    },
+    {
+      "hora": 2,
+      "registros": 2192,
+      "taxa": 0.15967
+    },
+    {
+      "hora": 3,
+      "registros": 2192,
+      "taxa": 0.14964
+    },
+    {
+      "hora": 4,
+      "registros": 2192,
+      "taxa": 0.14279
+    },
+    {
+      "hora": 5,
+      "registros": 2192,
+      "taxa": 0.13869
+    },
+    {
+      "hora": 6,
+      "registros": 2192,
+      "taxa": 0.14507
+    },
+    {
+      "hora": 7,
+      "registros": 2192,
+      "taxa": 0.18203
+    },
+    {
+      "hora": 8,
+      "registros": 2192,
+      "taxa": 0.21943
+    },
+    {
+      "hora": 9,
+      "registros": 2192,
+      "taxa": 0.2427
+    },
+    {
+      "hora": 10,
+      "registros": 2192,
+      "taxa": 0.24863
+    },
+    {
+      "hora": 11,
+      "registros": 2192,
+      "taxa": 0.26141
+    },
+    {
+      "hora": 12,
+      "registros": 2192,
+      "taxa": 0.30794
+    },
+    {
+      "hora": 13,
+      "registros": 2192,
+      "taxa": 0.37318
+    },
+    {
+      "hora": 14,
+      "registros": 2192,
+      "taxa": 0.38504
+    },
+    {
+      "hora": 15,
+      "registros": 2192,
+      "taxa": 0.35812
+    },
+    {
+      "hora": 16,
+      "registros": 2192,
+      "taxa": 0.27144
+    },
+    {
+      "hora": 17,
+      "registros": 2192,
+      "taxa": 0.18796
+    },
+    {
+      "hora": 18,
+      "registros": 2192,
+      "taxa": 0.16697
+    },
+    {
+      "hora": 19,
+      "registros": 2192,
+      "taxa": 0.15693
+    },
+    {
+      "hora": 20,
+      "registros": 2192,
+      "taxa": 0.14507
+    },
+    {
+      "hora": 21,
+      "registros": 2191,
+      "taxa": 0.14331
+    },
+    {
+      "hora": 22,
+      "registros": 2191,
+      "taxa": 0.14833
+    },
+    {
+      "hora": 23,
+      "registros": 2191,
+      "taxa": 0.15792
+    }
+  ],
+  "chuva_mensal_historica": [
+    {
+      "mes": 1,
+      "registros": 4464,
+      "taxa": 0.43974
+    },
+    {
+      "mes": 2,
+      "registros": 4080,
+      "taxa": 0.45735
+    },
+    {
+      "mes": 3,
+      "registros": 4464,
+      "taxa": 0.37858
+    },
+    {
+      "mes": 4,
+      "registros": 4320,
+      "taxa": 0.25556
+    },
+    {
+      "mes": 5,
+      "registros": 4464,
+      "taxa": 0.04839
+    },
+    {
+      "mes": 6,
+      "registros": 4320,
+      "taxa": 0.03102
+    },
+    {
+      "mes": 7,
+      "registros": 4464,
+      "taxa": 0.0
+    },
+    {
+      "mes": 8,
+      "registros": 4464,
+      "taxa": 0.01411
+    },
+    {
+      "mes": 9,
+      "registros": 4320,
+      "taxa": 0.05556
+    },
+    {
+      "mes": 10,
+      "registros": 4464,
+      "taxa": 0.17294
+    },
+    {
+      "mes": 11,
+      "registros": 4320,
+      "taxa": 0.26157
+    },
+    {
+      "mes": 12,
+      "registros": 4461,
+      "taxa": 0.42972
+    }
+  ],
+  "ausentes_original": {
+    "time": 0,
+    "temperature_2m": 0,
+    "relative_humidity_2m": 0,
+    "dew_point_2m": 0,
+    "surface_pressure": 0,
+    "cloud_cover": 0,
+    "wind_speed_10m": 0,
+    "wind_direction_10m": 0,
+    "precipitation": 0
+  },
+  "estatisticas_descritivas": {
+    "temperature_2m": {
+      "media": 27.152,
+      "min": 7.8,
+      "max": 42.0
+    },
+    "relative_humidity_2m": {
+      "media": 67.755,
+      "min": 6.0,
+      "max": 100.0
+    },
+    "precipitation": {
+      "media": 0.117,
+      "min": 0.0,
+      "max": 11.9
+    }
+  },
+  "notas": [
+    "Alvo construído somente com precipitação futura; não é usada como entrada.",
+    "Dados históricos de reanálise (ERA5); ao vivo, a Open-Meteo fornece estimativas meteorológicas de outros modelos. Pode haver mudança de distribuição.",
+    "Probabilidades classificadas não foram calibradas separadamente.",
+    "Resultados correspondem ao período e à origem de dados apresentados; não garantem desempenho operacional futuro."
+  ]
+}

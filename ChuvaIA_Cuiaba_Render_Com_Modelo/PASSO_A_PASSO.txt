@@ -1,0 +1,11 @@
+CHUVAIA CUIABÁ — PASSO A PASSO
+
+1. Extraia o arquivo ZIP em uma pasta.
+2. Acesse github.com e crie um novo repositório vazio (sem README automático) chamado chuvaia-cuiaba-uc9.
+3. No repositório novo clique em 'uploading an existing file' ou Add file > Upload files.
+4. Arraste os arquivos e pastas DE DENTRO da pasta extraída (não a pasta-mãe nem o ZIP) para a página.
+5. Confira app.py e requirements.txt na raiz, artefatos/modelo_chuva.joblib e assets/logo_chuvaia.png nas subpastas.
+6. Clique em Commit changes.
+7. Cole o link do repositório na conversa e confirme qual workspace Render pode ser usado.
+
+O modelo foi compactado e ficou abaixo de 25 MiB para upload no navegador do GitHub.
