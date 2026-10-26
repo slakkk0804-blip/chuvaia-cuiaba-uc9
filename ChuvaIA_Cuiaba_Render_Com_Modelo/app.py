@@ -4,9 +4,11 @@ import calendar
 import html
 import json
 import sqlite3
+import math
 from datetime import date, datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import joblib
 import numpy as np
@@ -369,6 +371,82 @@ def abrir_modelo():
     return joblib.load(MODELO), abrir_metricas()
 
 
+
+def obter_meteorologia_met_norway() -> dict:
+    """Fonte de reserva: previsão MET Norway para as coordenadas de Cuiabá.
+
+    Os campos são normalizados ao contrato Open-Meteo do modelo. A pressão de
+    superfície é estimada a partir da pressão ao nível do mar e da altitude;
+    essa transformação e a troca de origem exigem validação posterior.
+    """
+    url = "https://api.met.no/weatherapi/locationforecast/2.0/compact"
+    resposta = requests.get(
+        url, params={"lat": LATITUDE, "lon": LONGITUDE}, timeout=20,
+        headers={
+            "User-Agent": "ChuvaIA-Campo-UC9/1.2 (https://github.com/slakkk0804-blip/chuvaia-cuiaba-uc9)",
+            "Accept": "application/json",
+        },
+    )
+    resposta.raise_for_status()
+    retorno = resposta.json()
+    serie = retorno["properties"]["timeseries"]
+    if not serie:
+        raise ValueError("MET Norway não retornou horários")
+
+    agora = datetime.now(timezone.utc)
+    def parse_tempo(item: dict) -> datetime:
+        return datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
+
+    ponto = min(serie, key=lambda v: abs((parse_tempo(v) - agora).total_seconds()))
+    instante = parse_tempo(ponto)
+    # O ponto precisa representar um horário próximo ao momento da consulta.
+    if abs((instante - agora).total_seconds()) > 2 * 3600:
+        raise ValueError("A fonte alternativa não possui dados meteorológicos recentes")
+    detalhes = ponto["data"]["instant"]["details"]
+    temperatura = float(detalhes["air_temperature"])
+    umidade = float(detalhes["relative_humidity"])
+    pressao_mar = float(detalhes["air_pressure_at_sea_level"])
+    nub = float(detalhes["cloud_area_fraction"])
+    vento_ms = float(detalhes["wind_speed"])
+    direcao = float(detalhes["wind_from_direction"])
+    valores = (temperatura, umidade, pressao_mar, nub, vento_ms, direcao)
+    if not all(math.isfinite(v) for v in valores) or not (0 < umidade <= 100):
+        raise ValueError("Valores inválidos na previsão alternativa")
+    if not (-50 <= temperatura <= 65 and 800 <= pressao_mar <= 1100
+            and 0 <= nub <= 100 and 0 <= vento_ms <= 100):
+        raise ValueError("Valores fora das faixas meteorológicas esperadas")
+
+    # O ponto de orvalho é fornecido em algumas respostas MET; caso contrário,
+    # calculado com Magnus a partir de temperatura e umidade relativa.
+    if detalhes.get("dew_point_temperature") is not None:
+        orvalho = float(detalhes["dew_point_temperature"])
+    else:
+        gama = math.log(umidade / 100.0) + (17.625 * temperatura) / (243.04 + temperatura)
+        orvalho = 243.04 * gama / (17.625 - gama)
+
+    # MET fornece pressão ao nível do mar, enquanto o RF espera pressão local.
+    # Usamos a elevação do ponto retornada no JSON MET. Se indisponível,
+    # escolhemos um valor aproximado explicitamente declarado (165 m).
+    coords = retorno.get("geometry", {}).get("coordinates", [])
+    elevacao = float(coords[2]) if len(coords) >= 3 and coords[2] is not None else 165.0
+    if not (-100 <= elevacao <= 5000):
+        raise ValueError("Altitude de referência inválida")
+    pressao_local = pressao_mar * math.exp(-9.80665 * elevacao / (287.05 * (temperatura + 273.15)))
+    dado = {
+        "time": instante.astimezone(ZoneInfo(TIMEZONE)).strftime("%Y-%m-%dT%H:%M"),
+        "temperature_2m": temperatura,
+        "relative_humidity_2m": umidade,
+        "dew_point_2m": orvalho,
+        "surface_pressure": pressao_local,
+        "cloud_cover": nub,
+        "wind_speed_10m": vento_ms * 3.6,  # MET em m/s; Open-Meteo em km/h
+        "wind_direction_10m": direcao,
+    }
+    if not all(math.isfinite(float(dado[k])) for k in METEO):
+        raise ValueError("Valores incompletos após conversão de unidades")
+    return dado
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def buscar_tempo() -> dict:
     """Consulta compartilhada por visitantes, com cooldown para erros 429.
@@ -438,6 +516,7 @@ def buscar_tempo() -> dict:
         snapshot = {
             "atual": atual,
             "consultado_utc": datetime.now(timezone.utc).isoformat(),
+            "fonte": "Open-Meteo",
         }
         try:
             CACHE_TEMPO.parent.mkdir(parents=True, exist_ok=True)
@@ -455,6 +534,28 @@ def buscar_tempo() -> dict:
     except (ValueError, TypeError, KeyError):
         motivo = "A fonte retornou dados meteorológicos incompletos ou inválidos"
 
+    # Fonte alternativa legítima quando Open-Meteo limita o IP (HTTP 429).
+    # O RF continua sendo o modelo de previsão de chuva: não usamos a chance
+    # pronta do provedor. Dados estimados têm proveniência visível no painel.
+    try:
+        alternativo = obter_meteorologia_met_norway()
+        snapshot = {
+            "atual": alternativo,
+            "consultado_utc": datetime.now(timezone.utc).isoformat(),
+            "fonte": "MET Norway",
+        }
+        try:
+            CACHE_TEMPO.parent.mkdir(parents=True, exist_ok=True)
+            temporario = CACHE_TEMPO.with_suffix(".tmp")
+            temporario.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+            temporario.replace(CACHE_TEMPO)
+        except OSError:
+            pass
+        return {**snapshot, "estado": "alternativa", "mensagem": motivo}
+    except (requests.RequestException, ValueError, TypeError, KeyError,
+            IndexError, AttributeError, OSError) as erro_alternativo:
+        motivo += "; MET Norway também não pôde ser consultada"
+
     # Não inventar uma previsão em caso de erro. Só usar informação real recente.
     try:
         snapshot = json.loads(CACHE_TEMPO.read_text(encoding="utf-8"))
@@ -466,7 +567,7 @@ def buscar_tempo() -> dict:
             return {**snapshot, "estado": "anterior", "mensagem": motivo}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass
-    return {"atual": None, "consultado_utc": None,
+    return {"atual": None, "consultado_utc": None, "fonte": None,
             "estado": "indisponivel", "mensagem": motivo}
 
 
@@ -720,12 +821,13 @@ def topbar(title: str) -> None:
     )
 
 
-def quick_cards(atual: dict, prob: float) -> None:
+def quick_cards(atual: dict, prob: float, dados_estimados: bool = False) -> None:
+    tipo = "Estimativa meteorológica" if dados_estimados else "Condição atual"
     cards = [
-        ("orange", f"{pt_num(v_float(atual, 'temperature_2m'))}°C", "Temperatura", "Condição atual", "☀"),
+        ("orange", f"{pt_num(v_float(atual, 'temperature_2m'))}°C", "Temperatura", tipo, "☀"),
         ("purple", f"{pt_num(prob * 100, 1)}%", "Chance de chuva", "Próximas 3 horas", "☁"),
-        ("cyan", f"{pt_num(v_float(atual, 'relative_humidity_2m'), 0)}%", "Umidade do ar", "Condição atual", "◉"),
-        ("blue", f"{pt_num(v_float(atual, 'wind_speed_10m'))} km/h", "Vento", "Velocidade atual", "≈"),
+        ("cyan", f"{pt_num(v_float(atual, 'relative_humidity_2m'), 0)}%", "Umidade do ar", tipo, "◉"),
+        ("blue", f"{pt_num(v_float(atual, 'wind_speed_10m'))} km/h", "Vento", "Estimativa meteorológica" if dados_estimados else "Velocidade atual", "≈"),
     ]
     content = ''.join(
         f'<div class="quick-card {c}"><div class="quick-label">{html.escape(lab)}</div>'
@@ -1030,7 +1132,7 @@ def pagina_campo():
             buscar_tempo.clear()
             st.rerun(scope="fragment")
     with aviso:
-        st.caption("Dados Open-Meteo · atualização automática a cada ~15 minutos")
+        st.caption("Fontes: Open-Meteo / MET Norway · atualização automática a cada ~15 minutos")
     dados = buscar_tempo()
     atual, prob = dados["atual"], None
     try:
@@ -1058,6 +1160,14 @@ def pagina_campo():
         st.warning("A última consulta foi feita há mais de 45 minutos. "
                    "Para não exibir uma previsão antiga como atual, o risco foi ocultado.")
 
+    if dados["estado"] == "alternativa":
+        st.warning(
+            "**Fonte alternativa em uso: MET Norway.** A Open-Meteo não pôde ser consultada. "
+            "O Random Forest está usando variáveis meteorológicas estimadas por outro provedor; "
+            "a pressão foi convertida para pressão local e o ponto de orvalho pode ser derivado. "
+            "**Esta combinação ainda não foi validada com as métricas históricas do projeto.**"
+        )
+
     if dados["estado"] == "anterior":
         st.warning(f"{dados['mensagem']}. Exibindo dados consultados há "
                    f"{idade_min if idade_min is not None else '?'} minutos, "
@@ -1068,7 +1178,7 @@ def pagina_campo():
                    "As orientações de proteção rural continuam disponíveis.")
 
     if prob is not None:
-        quick_cards(atual, prob)
+        quick_cards(atual, prob, dados_estimados=(dados.get("fonte") == "MET Norway"))
         desc, nivel, badge_class, icone = nivel_chuva(prob)
         risco = ("Monitorar condições" if prob < .30 else
                  "Revisar medidas de proteção" if prob < .65 else
@@ -1094,9 +1204,10 @@ def pagina_campo():
                     '<div class="helper-text">Chance estimada de pelo menos 0,2 mm de chuva acumulada '
                     'nas três horas seguintes à hora de referência. '
                     '<strong>Não informa intensidade nem garante que choverá.</strong></div>'
-                    f'<div class="small-print">Hora meteorológica: '
+                    f'<div class="small-print">Horário de referência dos dados: '
                     f'{html.escape(str(atual["time"]).replace("T", " às "))} · Cuiabá. '
                     f'Consulta feita há {idade_min} minuto(s). '
+                    f'Fonte: {html.escape(str(dados.get("fonte") or "indisponível"))}. '
                     f'{"Dados recuperados de consulta anterior." if dados["estado"] == "anterior" else ""}</div>',
                     unsafe_allow_html=True)
     with b:
@@ -1152,9 +1263,11 @@ def pagina_campo():
             st.dataframe(pd.DataFrame(tabela),hide_index=True,width="stretch")
         st.write("**Limitações:** probabilidade não calibrada; menor desempenho na estação seca; não estima milímetros, intensidade, condições por propriedade ou umidade do solo. "
                  "Orientações são regras preventivas gerais, e não previsões do Random Forest.")
-        st.caption("Fontes meteorológicas: Open-Meteo/ERA5. Demonstração acadêmica SENAC UC9 · Grupo 6.")
-    st.caption("Fonte dos dados meteorológicos: Open-Meteo (CC BY 4.0). ChuvaIA Campo é um "
-               "protótipo educacional de apoio à decisão e não substitui alertas oficiais ou avaliação agronômica.")
+        st.caption("Treinamento e avaliação: Open-Meteo/ERA5. Entrada atual: Open-Meteo ou, em contingência, MET Norway. "
+                   "O desempenho do modelo com dados MET Norway ainda não foi medido. SENAC UC9 · Grupo 6.")
+    st.caption("Dados meteorológicos: Open-Meteo (CC BY 4.0) e MET Norway (quando necessário). "
+               "ChuvaIA Campo é um protótipo educacional de apoio à decisão e não substitui "
+               "alertas oficiais ou avaliação agronômica.")
 
 
 def inicio_campo():
