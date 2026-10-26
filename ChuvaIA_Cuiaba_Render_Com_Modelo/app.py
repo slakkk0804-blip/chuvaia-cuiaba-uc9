@@ -23,7 +23,7 @@ HISTORICO = BASE / "dados" / "historico_previsoes.sqlite3"
 LOGO = BASE / "assets" / "logo_chuvaia.png"
 
 st.set_page_config(
-    page_title="ChuvaIA Cuiabá",
+    page_title="ChuvaIA Campo | Cuiabá",
     page_icon="☁️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -904,4 +904,141 @@ def main() -> None:
         report_page()
 
 
-main()
+
+# --- CHUVAIA CAMPO: PAGINA UNICA ---
+ATIVIDADES_CAMPO = {
+    "Colheita e produtos expostos": [
+        ("Proteger produtos", "Confira cobertura de caixas, sacarias e produtos já colhidos."),
+        ("Priorizar áreas cobertas", "Se possível, transfira produtos sensíveis à água para uma área protegida."),
+        ("Reavaliar a colheita", "Verifique condições da cultura e do terreno antes de continuar."),
+    ],
+    "Preparação do solo e máquinas": [
+        ("Inspecionar o solo", "Avalie umidade, compactação e acesso de máquinas."),
+        ("Proteger equipamentos", "Confira máquinas e materiais vulneráveis à água."),
+        ("Organizar alternativas", "Considere inspeção ou manutenção em local protegido."),
+    ],
+    "Carregamento e transporte": [
+        ("Conferir a carga", "Revise lonas e embalagens contra umidade."),
+        ("Reduzir a exposição", "Evite manter cargas sensíveis em áreas descobertas."),
+        ("Verificar o trajeto", "Consulte as condições das estradas e informações meteorológicas locais."),
+    ],
+    "Armazenamento temporário": [
+        ("Conferir a cobertura", "Inspecione telhados, lonas, calhas e pontos de infiltração."),
+        ("Proteger itens vulneráveis", "Cuide de sementes, insumos e produtos sensíveis à umidade."),
+        ("Reorganizar materiais", "Avalie levar os produtos para áreas cobertas e ventiladas."),
+    ],
+}
+
+
+def moeda(valor):
+    return "R$ " + f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+@st.fragment(run_every="15min")
+def pagina_campo():
+    topbar("ChuvaIA Campo")
+    st.markdown('<div class="section-subtitle">Proteção da produção rural · Planejamento de atividades em Cuiabá, MT</div>', unsafe_allow_html=True)
+    bot, aviso = st.columns([1, 3], vertical_alignment="center")
+    with bot:
+        if st.button("↻ Atualizar dados", width="stretch", key="update_campo"):
+            buscar_tempo.clear()
+            st.rerun(scope="fragment")
+    with aviso:
+        st.caption("Dados Open-Meteo · atualização automática a cada ~15 minutos")
+    try:
+        atual = buscar_tempo()
+        pacote, meta = abrir_modelo()
+        prob = prever(atual, pacote)
+    except (requests.RequestException, FileNotFoundError, OSError, ValueError, KeyError, IndexError, AttributeError, TypeError) as erro:
+        st.error("Não foi possível consultar os dados ou calcular a previsão.")
+        st.caption(f"Detalhes: {erro}")
+        return
+
+    quick_cards(atual, prob)
+    desc, nivel, badge_class, icone = nivel_chuva(prob)
+    risco = ("Monitorar condições" if prob < .30 else "Revisar medidas de proteção" if prob < .65 else "Priorizar preparação")
+    a, b = st.columns([1.25, 1], gap="medium")
+    with a:
+        with st.container(key="forecast_panel"):
+            st.markdown(
+                '<div class="section-title">Previsão para as próximas 3 horas</div>'
+                '<div class="section-subtitle">Estimativa produzida pelo modelo Random Forest treinado para Cuiabá.</div>'
+                f'<div class="forecast-copy"><div><div class="big-prob">{pt_num(prob*100)}%</div>'
+                f'<div class="risk-badge {badge_class}">● Nível {html.escape(nivel.lower())}</div></div>'
+                f'<div class="forecast-emoji">{icone}</div></div>'
+                f'<div class="progress-track"><div class="progress-fill" style="width:{prob*100:.2f}%"></div></div>'
+                '<div class="helper-text">Chance estimada de pelo menos 0,2 mm de chuva acumulada nas três horas seguintes. '
+                '<strong>Não informa a intensidade e não garante que choverá.</strong></div>'
+                f'<div class="small-print">Dados observados/estimados: {html.escape(str(atual["time"]).replace("T", " às "))} · horário de Cuiabá.</div>',
+                unsafe_allow_html=True)
+    with b:
+        with st.container(key="weather_panel"):
+            st.markdown('<div class="section-title">🚜 Atividade no campo</div>'
+                        '<div class="section-subtitle">Qual atividade você pretende realizar?</div>',
+                        unsafe_allow_html=True)
+            atividade = st.selectbox("Escolha a atividade", list(ATIVIDADES_CAMPO), key="atividade_campo")
+            st.caption("A atividade define orientações preventivas. Ela não altera a previsão do modelo.")
+            st.info(f"**{risco}.** Considere as condições reais na propriedade e a previsão meteorológica local.")
+
+    st.markdown('<div class="section-title" style="margin-top:10px">🛡️ Proteção da produção rural</div>'
+                '<div class="section-subtitle">Medidas gerais para avaliar antes do trabalho — não são decisões automáticas da IA.</div>',
+                unsafe_allow_html=True)
+    with st.container(key="recent_panel"):
+        for i,(nome, detalhe) in enumerate(ATIVIDADES_CAMPO[atividade],1):
+            st.markdown(f'<div style="display:flex;gap:13px;padding:13px 4px;border-bottom:1px solid #edf0f5">'
+                        f'<div class="person-avatar">{i}</div><div><div class="person-name">{html.escape(nome)}</div>'
+                        f'<div class="person-meta" style="color:#536076!important;line-height:1.6">{html.escape(detalhe)}</div></div></div>',
+                        unsafe_allow_html=True)
+        st.caption("A ocorrência de chuva, isoladamente, não informa intensidade, umidade do solo nem riscos específicos da atividade.")
+
+    with st.expander("💰 Simulação de impacto econômico (hipotética)"):
+        st.write("Simule o prejuízo **caso a chuva afete a atividade**; isto não representa economia comprovada.")
+        x,y,z = st.columns(3)
+        with x: perda=st.number_input("Prejuízo sem proteção (R$)", 0.0, 1000000.0, 500.0, 50.0)
+        with y: parcela=st.number_input("Parcela evitável (%)", 0, 100, 50, 5)
+        with z: custo=st.number_input("Custo da proteção (R$)", 0.0, 1000000.0, 80.0, 10.0)
+        protegido=perda*(1-parcela/100)+custo
+        ca,cb,cc=st.columns(3)
+        ca.metric("Sem proteção",moeda(perda))
+        cb.metric("Com proteção",moeda(protegido))
+        cc.metric("Diferença simulada",moeda(perda-protegido))
+        st.caption("Premissas definidas pelo usuário: prejuízo com proteção = prejuízo sem proteção × (1 − fração evitável) + custo. Não é economia estatisticamente prevista.")
+
+    with st.expander("📊 Projeto UC9 · IA, métricas e limitações"):
+        st.write("**Problema:** ajudar produtores a priorizar proteção de colheitas, máquinas e mercadorias diante do risco de chuva.")
+        st.write("**Método:** Open-Meteo/ERA5 (2020–2025); baseline, Regressão Logística, Random Forest e Gradient Boosting com validação temporal.")
+        if meta:
+            modelo=meta["algoritmo_escolhido"]
+            m=meta["metricas_teste"][modelo]
+            c1,c2,c3=st.columns(3)
+            c1.metric("Acurácia",f"{pt_num(m['acuracia']*100,2)}%")
+            c2.metric("F1 macro",f"{pt_num(m['f1_macro']*100,2)}%")
+            c3.metric("Recall chuva",f"{pt_num(m['recall_chuva']*100,2)}%")
+            st.caption("Resultados históricos em teste cronológico, sem garantia de desempenho futuro.")
+            tabela=[{"Modelo":nome,"F1 macro":f"{pt_num(v['f1_macro']*100,2)}%"} for nome,v in meta["metricas_teste"].items()]
+            st.dataframe(pd.DataFrame(tabela),hide_index=True,width="stretch")
+        st.write("**Limitações:** probabilidade não calibrada; menor desempenho na estação seca; não estima milímetros, intensidade, condições por propriedade ou umidade do solo. "
+                 "Orientações são regras preventivas gerais, e não previsões do Random Forest.")
+        st.caption("Fontes meteorológicas: Open-Meteo/ERA5. Demonstração acadêmica SENAC UC9 · Grupo 6.")
+    st.caption("ChuvaIA Campo é um protótipo educacional de apoio à decisão e não substitui alertas oficiais ou avaliação agronômica.")
+
+
+def inicio_campo():
+    with st.sidebar:
+        if LOGO.exists():
+            st.image(str(LOGO), width="stretch")
+        else:
+            st.markdown("### 🌱 ChuvaIA Campo")
+        st.markdown('<div class="nav-section-label">PAINEL ÚNICO</div>'
+                    '<div class="sidebar-note" style="margin-top:8px;padding-top:8px">'
+                    '<strong>PROTEÇÃO DA PRODUÇÃO RURAL</strong>'
+                    '<span>Previsão automática e planejamento preventivo no campo.</span>'
+                    '</div><div class="sidebar-note"><strong>LOCALIDADE</strong>'
+                    '<span>Cuiabá, Mato Grosso — previsão pontual para a cidade.</span>'
+                    '</div><div class="sidebar-note"><strong>SENAC · UC9 · GRUPO 6</strong>'
+                    '<span>Machine Learning aplicado ao clima.</span></div>',
+                    unsafe_allow_html=True)
+    pagina_campo()
+
+
+inicio_campo()
