@@ -4,7 +4,8 @@ import calendar
 import html
 import json
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import joblib
@@ -20,6 +21,8 @@ BASE = Path(__file__).resolve().parent
 METRICAS = BASE / "artefatos" / "metricas.json"
 MODELO = BASE / "artefatos" / "modelo_chuva.joblib"
 HISTORICO = BASE / "dados" / "historico_previsoes.sqlite3"
+CACHE_TEMPO = BASE / "dados" / "ultimo_tempo_valido.json"
+CACHE_BLOQUEIO = BASE / "dados" / "limite_openmeteo.json"
 LOGO = BASE / "assets" / "logo_chuvaia.png"
 
 st.set_page_config(
@@ -366,8 +369,17 @@ def abrir_modelo():
     return joblib.load(MODELO), abrir_metricas()
 
 
-@st.cache_data(ttl=850, show_spinner=False)
-def buscar_tempo():
+@st.cache_data(ttl=900, show_spinner=False)
+def buscar_tempo() -> dict:
+    """Consulta compartilhada por visitantes, com cooldown para erros 429.
+
+    Tanto sucesso quanto indisponibilidade são guardados 15 minutos na cache
+    do Streamlit. Isso impede que cada visitante/refresh faça nova chamada
+    quando o IP da hospedagem estiver temporariamente limitado.
+
+    A última resposta válida também é salva localmente para quedas passageiras.
+    Em um redeploy ou restart no Render gratuito, essa cópia pode desaparecer.
+    """
     parametros = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
@@ -375,13 +387,87 @@ def buscar_tempo():
         "current": ",".join([*METEO, "weather_code"]),
         "forecast_days": 1,
     }
-    resposta = requests.get("https://api.open-meteo.com/v1/forecast", params=parametros, timeout=18)
-    resposta.raise_for_status()
-    atual = resposta.json().get("current", {})
-    faltando = [campo for campo in [*METEO, "time"] if atual.get(campo) is None]
-    if faltando:
-        raise ValueError("API sem variáveis necessárias: " + ", ".join(faltando))
-    return atual
+    motivo = "Não foi possível acessar a fonte meteorológica neste momento."
+    # Evita solicitar novamente antes do prazo informado em Retry-After.
+    try:
+        estado_bloqueio = json.loads(CACHE_BLOQUEIO.read_text(encoding="utf-8"))
+        limite = datetime.fromisoformat(estado_bloqueio["proxima_tentativa_utc"])
+        if limite > datetime.now(timezone.utc):
+            motivo = "A Open-Meteo está limitando temporariamente o acesso (HTTP 429)"
+            bloqueado = True
+        else:
+            bloqueado = False
+    except (OSError, ValueError, KeyError, TypeError):
+        bloqueado = False
+    try:
+        if bloqueado:
+            raise requests.HTTPError(motivo)
+        resposta = requests.get(
+            "https://api.open-meteo.com/v1/forecast", params=parametros,
+            timeout=18, headers={"User-Agent": "ChuvaIA-Campo-SENAC-UC9/1.0"},
+        )
+        if resposta.status_code == 429:
+            motivo = "A Open-Meteo limitou temporariamente o acesso (HTTP 429)"
+            # Respeita Retry-After quando disponível e, na falta dele,
+            # mantém um intervalo mínimo de quinze minutos.
+            espera = 900
+            indicado = resposta.headers.get("Retry-After", "").strip()
+            try:
+                if indicado.isdecimal():
+                    espera = max(espera, int(indicado))
+                elif indicado:
+                    espera = max(espera, int((parsedate_to_datetime(indicado)
+                                             - datetime.now(timezone.utc)).total_seconds()))
+            except (ValueError, TypeError, OverflowError):
+                pass
+            espera = min(espera, 86400)
+            try:
+                CACHE_BLOQUEIO.parent.mkdir(parents=True, exist_ok=True)
+                CACHE_BLOQUEIO.write_text(json.dumps({
+                    "proxima_tentativa_utc": (datetime.now(timezone.utc)
+                                           + timedelta(seconds=espera)).isoformat()
+                }), encoding="utf-8")
+            except OSError:
+                pass
+            raise requests.HTTPError(motivo, response=resposta)
+        resposta.raise_for_status()
+        atual = resposta.json().get("current", {})
+        faltando = [c for c in [*METEO, "time"] if atual.get(c) is None]
+        if faltando:
+            raise ValueError("A fonte não retornou todas as variáveis meteorológicas")
+        snapshot = {
+            "atual": atual,
+            "consultado_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            CACHE_TEMPO.parent.mkdir(parents=True, exist_ok=True)
+            temporario = CACHE_TEMPO.with_suffix(".tmp")
+            temporario.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+            temporario.replace(CACHE_TEMPO)
+        except OSError:
+            pass  # Cache em disco é opcional; não bloqueia uma previsão válida.
+        return {**snapshot, "estado": "atual", "mensagem": ""}
+    except requests.HTTPError as erro:
+        if not bloqueado and getattr(erro.response, "status_code", None) != 429:
+            motivo = f"O serviço meteorológico retornou HTTP {erro.response.status_code if erro.response is not None else 'indisponível'}"
+    except requests.RequestException:
+        motivo = "Falha de comunicação com a fonte meteorológica"
+    except (ValueError, TypeError, KeyError):
+        motivo = "A fonte retornou dados meteorológicos incompletos ou inválidos"
+
+    # Não inventar uma previsão em caso de erro. Só usar informação real recente.
+    try:
+        snapshot = json.loads(CACHE_TEMPO.read_text(encoding="utf-8"))
+        recebido = datetime.fromisoformat(snapshot["consultado_utc"])
+        idade_s = (datetime.now(timezone.utc) - recebido).total_seconds()
+        if 0 <= idade_s <= 3600 and all(
+            snapshot["atual"].get(c) is not None for c in [*METEO, "time"]
+        ):
+            return {**snapshot, "estado": "anterior", "mensagem": motivo}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return {"atual": None, "consultado_utc": None,
+            "estado": "indisponivel", "mensagem": motivo}
 
 
 def prever(atual: dict, pacote: dict) -> float:
@@ -656,7 +742,7 @@ def dashboard_page() -> None:
     refresh_slot, status_slot = st.columns([1.2, 3], vertical_alignment="center")
     with refresh_slot:
         if st.button("↻ Atualizar previsão", key="force_refresh", width="stretch"):
-            buscar_tempo.clear()
+            # Não limpe o cache aqui: isso provocaria novas chamadas e mais erros 429.
             st.rerun(scope="fragment")
     with status_slot:
         st.caption("Dados estimados pela Open-Meteo · renovação automática a cada 15 minutos")
@@ -940,37 +1026,79 @@ def pagina_campo():
     st.markdown('<div class="section-subtitle">Proteção da produção rural · Planejamento de atividades em Cuiabá, MT</div>', unsafe_allow_html=True)
     bot, aviso = st.columns([1, 3], vertical_alignment="center")
     with bot:
-        if st.button("↻ Atualizar dados", width="stretch", key="update_campo"):
+        if st.button("↻ Recarregar painel", width="stretch", key="update_campo"):
             buscar_tempo.clear()
             st.rerun(scope="fragment")
     with aviso:
         st.caption("Dados Open-Meteo · atualização automática a cada ~15 minutos")
+    dados = buscar_tempo()
+    atual, prob = dados["atual"], None
     try:
-        atual = buscar_tempo()
-        pacote, meta = abrir_modelo()
-        prob = prever(atual, pacote)
-    except (requests.RequestException, FileNotFoundError, OSError, ValueError, KeyError, IndexError, AttributeError, TypeError) as erro:
-        st.error("Não foi possível consultar os dados ou calcular a previsão.")
-        st.caption(f"Detalhes: {erro}")
-        return
+        meta = abrir_metricas()
+    except (FileNotFoundError, OSError, ValueError, KeyError):
+        meta = None
 
-    quick_cards(atual, prob)
-    desc, nivel, badge_class, icone = nivel_chuva(prob)
-    risco = ("Monitorar condições" if prob < .30 else "Revisar medidas de proteção" if prob < .65 else "Priorizar preparação")
+    idade_min = None
+    if atual is not None and dados["consultado_utc"]:
+        try:
+            idade_min = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(
+                dados["consultado_utc"])).total_seconds() / 60))
+        except (ValueError, TypeError):
+            idade_min = None
+
+    if atual is not None and idade_min is not None and idade_min <= 45:
+        try:
+            pacote, _ = abrir_modelo()
+            prob = prever(atual, pacote)
+        except (FileNotFoundError, OSError, ValueError, KeyError, IndexError,
+                AttributeError, TypeError) as erro:
+            st.error("Não foi possível executar o modelo treinado nesta consulta.")
+            st.caption(f"Detalhe técnico: {erro}")
+    elif atual is not None:
+        st.warning("A última consulta foi feita há mais de 45 minutos. "
+                   "Para não exibir uma previsão antiga como atual, o risco foi ocultado.")
+
+    if dados["estado"] == "anterior":
+        st.warning(f"{dados['mensagem']}. Exibindo dados consultados há "
+                   f"{idade_min if idade_min is not None else '?'} minutos, "
+                   "de forma identificada. A previsão pode estar desatualizada.")
+    elif dados["estado"] == "indisponivel":
+        st.warning(f"{dados['mensagem']}. A atualização será tentada novamente "
+                   "após a janela de cache de aproximadamente 15 minutos. "
+                   "As orientações de proteção rural continuam disponíveis.")
+
+    if prob is not None:
+        quick_cards(atual, prob)
+        desc, nivel, badge_class, icone = nivel_chuva(prob)
+        risco = ("Monitorar condições" if prob < .30 else
+                 "Revisar medidas de proteção" if prob < .65 else
+                 "Priorizar preparação")
+    else:
+        risco = "Previsão temporariamente indisponível"
     a, b = st.columns([1.25, 1], gap="medium")
     with a:
         with st.container(key="forecast_panel"):
-            st.markdown(
-                '<div class="section-title">Previsão para as próximas 3 horas</div>'
-                '<div class="section-subtitle">Estimativa produzida pelo modelo Random Forest treinado para Cuiabá.</div>'
-                f'<div class="forecast-copy"><div><div class="big-prob">{pt_num(prob*100)}%</div>'
-                f'<div class="risk-badge {badge_class}">● Nível {html.escape(nivel.lower())}</div></div>'
-                f'<div class="forecast-emoji">{icone}</div></div>'
-                f'<div class="progress-track"><div class="progress-fill" style="width:{prob*100:.2f}%"></div></div>'
-                '<div class="helper-text">Chance estimada de pelo menos 0,2 mm de chuva acumulada nas três horas seguintes. '
-                '<strong>Não informa a intensidade e não garante que choverá.</strong></div>'
-                f'<div class="small-print">Dados observados/estimados: {html.escape(str(atual["time"]).replace("T", " às "))} · horário de Cuiabá.</div>',
-                unsafe_allow_html=True)
+            st.markdown('<div class="section-title">Previsão para as próximas 3 horas</div>'
+                        '<div class="section-subtitle">Estimativa produzida pelo Random Forest para Cuiabá.</div>',
+                        unsafe_allow_html=True)
+            if prob is None:
+                st.info("**Sem previsão atualizada.** A fonte meteorológica está temporariamente "
+                        "indisponível ou os dados recentes não puderam ser processados. "
+                        "Não usamos valores fictícios para orientar trabalhos no campo.")
+            else:
+                st.markdown(
+                    f'<div class="forecast-copy"><div><div class="big-prob">{pt_num(prob*100)}%</div>'
+                    f'<div class="risk-badge {badge_class}">● Nível {html.escape(nivel.lower())}</div></div>'
+                    f'<div class="forecast-emoji">{icone}</div></div>'
+                    f'<div class="progress-track"><div class="progress-fill" style="width:{prob*100:.2f}%"></div></div>'
+                    '<div class="helper-text">Chance estimada de pelo menos 0,2 mm de chuva acumulada '
+                    'nas três horas seguintes à hora de referência. '
+                    '<strong>Não informa intensidade nem garante que choverá.</strong></div>'
+                    f'<div class="small-print">Hora meteorológica: '
+                    f'{html.escape(str(atual["time"]).replace("T", " às "))} · Cuiabá. '
+                    f'Consulta feita há {idade_min} minuto(s). '
+                    f'{"Dados recuperados de consulta anterior." if dados["estado"] == "anterior" else ""}</div>',
+                    unsafe_allow_html=True)
     with b:
         with st.container(key="weather_panel"):
             st.markdown('<div class="section-title">🚜 Atividade no campo</div>'
@@ -978,7 +1106,12 @@ def pagina_campo():
                         unsafe_allow_html=True)
             atividade = st.selectbox("Escolha a atividade", list(ATIVIDADES_CAMPO), key="atividade_campo")
             st.caption("A atividade define orientações preventivas. Ela não altera a previsão do modelo.")
-            st.info(f"**{risco}.** Considere as condições reais na propriedade e a previsão meteorológica local.")
+            if prob is None:
+                st.info("**Sem nível de risco calculado no momento.** Você ainda pode consultar "
+                        "as medidas de proteção para a atividade selecionada; considere previsões "
+                        "meteorológicas oficiais antes de tomar decisões.")
+            else:
+                st.info(f"**{risco}.** Considere as condições reais na propriedade e a previsão meteorológica local.")
 
     st.markdown('<div class="section-title" style="margin-top:10px">🛡️ Proteção da produção rural</div>'
                 '<div class="section-subtitle">Medidas gerais para avaliar antes do trabalho — não são decisões automáticas da IA.</div>',
@@ -1020,7 +1153,8 @@ def pagina_campo():
         st.write("**Limitações:** probabilidade não calibrada; menor desempenho na estação seca; não estima milímetros, intensidade, condições por propriedade ou umidade do solo. "
                  "Orientações são regras preventivas gerais, e não previsões do Random Forest.")
         st.caption("Fontes meteorológicas: Open-Meteo/ERA5. Demonstração acadêmica SENAC UC9 · Grupo 6.")
-    st.caption("ChuvaIA Campo é um protótipo educacional de apoio à decisão e não substitui alertas oficiais ou avaliação agronômica.")
+    st.caption("Fonte dos dados meteorológicos: Open-Meteo (CC BY 4.0). ChuvaIA Campo é um "
+               "protótipo educacional de apoio à decisão e não substitui alertas oficiais ou avaliação agronômica.")
 
 
 def inicio_campo():
